@@ -1,77 +1,62 @@
-# Mem0 Benchmark: RAG vs Memory Layer
+# RAG vs Mem0: Conversational AI Memory Benchmark
 
-This repository contains the official benchmark code for the article **"Benchmarking RAG vs Mem0: A rigorous technical analysis of stateful AI memory"**.
+This benchmark compares RAG (Retrieval-Augmented Generation) against Mem0 for **user-scoped conversational memory retrieval**.
 
-It provides a head-to-head comparison between a standard Production-Grade RAG implementation (using ChromaDB) and the Mem0 Platform.
+## The Problem
 
-## Experiment Design
+Conversational AI requires remembering facts about specific users across sessions. For example:
+- "What is MY expense limit?" (for user_hr)
+- "What is MY travel allowance?" (for user_engineering)
 
-The benchmark is designed to isolate **Retrieval Latency** and **Hit Rate** using a synthetic but high-fidelity dataset.
+**RAG** stores all facts in a single vector index with no user scoping. It retrieves based on semantic similarity alone.
 
-### The Dataset
-We generate 50 complex "Corporate Policy" documents using `generate_data.py`. 
-- **Chaos**: We inject version conflicts (v1 vs v2), departmental overlap (Engineering vs Sales policies), and noise.
-- **The Needle**: Each document contains a hidden, numeric `KEY_FACT` (e.g., spending limit).
-- **The Query**: We generate 1000 context-aware queries (e.g., "As an engineer, what can I spend?").
+**Mem0** stores facts in user-specific memory graphs. Retrieval is automatically scoped to the logged-in user.
 
-### The Competitors
-1. **Baseline**: `rag_backend.py` - Uses `chromadb` with metadata filtering and persistent storage.
-2. **Challenger**: `mem0_backend.py` - Uses Mem0 SDK with `user_id` scoping.
+## Results
 
-## How to Run
+| Metric | RAG | Mem0 |
+|--------|-----|------|
+| **Hit Rate** | 20% | **80%** |
+| Avg Latency | 0.01s | 0.68s |
 
-### Prerequisites
+Mem0 correctly retrieves user-specific facts. RAG returns semantically similar but **wrong-user** data.
+
+## Files
+
+- `benchmark_conversational.py` - Main benchmark script
+- `mem0_backend.py` - Mem0 Platform client wrapper
+- `rag_backend.py` - ChromaDB-based RAG baseline
+- `inspect_mem0.py` - Utility to inspect existing Mem0 memories
+- `conversational_benchmark_results.csv` - Sample results
+
+## Prerequisites
+
 - Python 3.10+
-- A Mem0 API Key (Get one free at [mem0.ai](https://mem0.ai))
+- Mem0 API Key (set in `mem0_backend.py`)
+- OpenAI API Key (if using generation features)
 
-### Installation
+## Installation
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/mem0ai/mem0-benchmark
-   cd mem0-benchmark
-   ```
-
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-### Running the Benchmark
-
-1. **Generate the Data**:
-   This script creates the `knowledge_base.json` and `benchmark_queries.json` files.
-   ```bash
-   python generate_data.py
-   ```
-
-2. **Run the Test**:
-   Set your API key and execute the runner.
-   ```bash
-   export MEM0_API_KEY="m0-xxx-your-key-xxx"
-   # Optional: export OPENAI_API_KEY="sk-..." if using OpenAI features in RAG extension
-   
-   python benchmark.py
-   ```
-
-### Results
-
-The script will output a summary to the console:
-
-```text
-XXX BENCHMARK REPORT XXX
-------------------------------
-Metric               | RAG (Local)     | Mem0 (Cloud)   
-------------------------------
-Hit Rate             | 30.00%          | 70.00%
-P50 Latency          | 0.0500s         | 0.4800s
-P95 Latency          | 0.0900s         | 0.8500s
-------------------------------
-Detailed results saved to benchmark_results_detailed.csv
+```bash
+pip install -r requirements.txt
 ```
 
-You can inspect `benchmark_results_detailed.csv` to analyze specific failure cases.
+## Running the Benchmark
 
-## Contributing
+```bash
+python benchmark_conversational.py
+```
 
-If you believe the RAG implementation is unfair, please open a PR! We welcome `HybridRAGBackend` or `RerankedRAGBackend` implementations to see how they stack up against the Memory Layer.
+The benchmark will:
+1. Fetch existing memories from Mem0
+2. Build a RAG index with those same memories (no scoping)
+3. Run retrieval queries for different users
+4. Compare hit rates
+
+## Key Insight
+
+RAG is a **knowledge base** tool. It answers "What does the corpus say?"
+
+Mem0 is a **memory layer**. It answers "What do I know about THIS user?"
+
+For conversational AI that requires user-specific context, Mem0 provides the necessary scoping that RAG lacks.
