@@ -18,23 +18,35 @@ RAG Baseline:
 Mem0 Challenger:
 - Facts are stored per-user in isolated memory graphs.
 - Search is scoped to the user_id.
+
+Usage:
+    python benchmark_conversational.py              # Use existing Mem0 memories
+    python benchmark_conversational.py --fresh      # Create new memories (fresh account)
 """
 
 import time
-import json
+import argparse
 import pandas as pd
-import numpy as np
 from mem0 import MemoryClient
 import chromadb
 from chromadb.utils import embedding_functions
 
 MEM0_API_KEY = "m0-dFFPdnL0iQP7DvUkRFMPTSk75TdcxH4DdyperOTF"
 
-# --- Test Data: Queries targeting known facts in Mem0 ---
-# Based on the inspection, we know these facts exist:
-# user_engineering: Travel Allowance $4662, Expense Reimbursement $206
-# user_hr: Expense Reimbursement $2343, Data Privacy $1095, Onboarding $1691
+# --- Sample Facts for Fresh Account Setup ---
+SAMPLE_FACTS = [
+    {"user_id": "user_engineering", "content": "My travel allowance limit is $4662 per quarter."},
+    {"user_id": "user_engineering", "content": "My expense reimbursement limit is $206 per month."},
+    {"user_id": "user_engineering", "content": "I work in the Engineering department and focus on backend systems."},
+    {"user_id": "user_hr", "content": "My expense reimbursement limit is $2343 per month."},
+    {"user_id": "user_hr", "content": "The data privacy policy limit is $1095 for training materials."},
+    {"user_id": "user_hr", "content": "The onboarding budget is $1691 per new hire."},
+    {"user_id": "user_hr", "content": "I work in HR and handle employee relations."},
+    {"user_id": "user_sales", "content": "My quarterly quota is $250000."},
+    {"user_id": "user_sales", "content": "My expense limit for client entertainment is $500 per event."},
+]
 
+# --- Test Queries ---
 TEST_QUERIES = [
     {"user_id": "user_engineering", "query": "What is my travel allowance limit?", "expected_fact": "4662"},
     {"user_id": "user_engineering", "query": "How much can I expense?", "expected_fact": "206"},
@@ -42,26 +54,31 @@ TEST_QUERIES = [
     {"user_id": "user_hr", "query": "What is the data privacy policy limit?", "expected_fact": "1095"},
     {"user_id": "user_hr", "query": "What is the onboarding budget?", "expected_fact": "1691"},
     # Cross-user queries to test scoping
-    {"user_id": "user_engineering", "query": "What is the onboarding budget?", "expected_fact": None},  # Should NOT find HR's fact
-    {"user_id": "user_hr", "query": "What is my travel allowance?", "expected_fact": None},  # Should NOT find Engineering's fact
+    {"user_id": "user_engineering", "query": "What is the onboarding budget?", "expected_fact": None},
+    {"user_id": "user_hr", "query": "What is my travel allowance?", "expected_fact": None},
 ]
 
-def run_benchmark():
-    print("=== Conversational AI Memory Retrieval Benchmark ===\n")
-    
-    # --- Initialize Systems ---
-    mem0_client = MemoryClient(api_key=MEM0_API_KEY)
-    
-    # For RAG, we need to ingest the same facts.
-    # We will fetch all memories from Mem0 and dump them into Chroma.
-    print("Step 1: Fetching all memories from Mem0 to build RAG baseline...")
-    
+def create_fresh_memories(client):
+    """Create sample memories for a fresh Mem0 account."""
+    print("Creating sample memories in Mem0...")
+    for fact in SAMPLE_FACTS:
+        client.add(
+            messages=[{"role": "user", "content": fact["content"]}],
+            user_id=fact["user_id"]
+        )
+        print(f"  + {fact['user_id']}: {fact['content'][:50]}...")
+    print(f"  -> Created {len(SAMPLE_FACTS)} memories.\n")
+    return SAMPLE_FACTS
+
+def fetch_existing_memories(client):
+    """Fetch existing memories from Mem0."""
+    print("Fetching existing memories from Mem0...")
     all_memories = []
     user_ids = ["user_engineering", "user_hr", "user_sales", "user_legal", "user_compliance", "benchmark_user_1"]
     
     for uid in user_ids:
         try:
-            res = mem0_client.search(query="*", filters={"user_id": uid}, limit=100)
+            res = client.search(query="*", filters={"user_id": uid}, limit=100)
             results = res.get("results", []) if isinstance(res, dict) else res
             for r in results:
                 all_memories.append({
@@ -72,25 +89,44 @@ def run_benchmark():
         except:
             pass
     
-    print(f"  -> Fetched {len(all_memories)} total memories across users.")
+    print(f"  -> Fetched {len(all_memories)} total memories across users.\n")
+    return all_memories
+
+def run_benchmark(use_fresh=False):
+    print("=== Conversational AI Memory Retrieval Benchmark ===\n")
     
-    # --- Build RAG Index (No User Scoping) ---
-    print("\nStep 2: Building RAG index (ChromaDB, no scoping)...")
+    mem0_client = MemoryClient(api_key=MEM0_API_KEY)
+    
+    # Step 1: Get memories (either create fresh or fetch existing)
+    if use_fresh:
+        print("Mode: FRESH ACCOUNT (creating new memories)\n")
+        memories = create_fresh_memories(mem0_client)
+        # Convert to format expected by RAG
+        all_memories = [{"user_id": m["user_id"], "memory": m["content"], "id": f"fresh_{i}"} for i, m in enumerate(memories)]
+    else:
+        print("Mode: EXISTING MEMORIES (fetching from Mem0)\n")
+        all_memories = fetch_existing_memories(mem0_client)
+    
+    if not all_memories:
+        print("ERROR: No memories found. Use --fresh to create sample memories.")
+        return
+    
+    # Step 2: Build RAG Index (No User Scoping)
+    print("Building RAG index (ChromaDB, no scoping)...")
     
     ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
     chroma_client = chromadb.Client()
     rag_collection = chroma_client.get_or_create_collection(name="rag_memories", embedding_function=ef)
     
-    # Ingest all memories into a single collection
     rag_collection.add(
         documents=[m["memory"] for m in all_memories],
         ids=[m["id"] for m in all_memories],
         metadatas=[{"user_id": m["user_id"]} for m in all_memories]
     )
-    print(f"  -> Indexed {len(all_memories)} memories into ChromaDB.")
+    print(f"  -> Indexed {len(all_memories)} memories into ChromaDB.\n")
     
-    # --- Run Benchmark ---
-    print("\nStep 3: Running retrieval tests...\n")
+    # Step 3: Run Benchmark
+    print("Running retrieval tests...\n")
     
     results = []
     
@@ -99,7 +135,7 @@ def run_benchmark():
         query_text = q["query"]
         expected = q["expected_fact"]
         
-        # --- RAG Retrieval (Global Search, No Scoping) ---
+        # RAG Retrieval (Global Search, No Scoping)
         rag_start = time.time()
         rag_results = rag_collection.query(query_texts=[query_text], n_results=3)
         rag_latency = time.time() - rag_start
@@ -111,7 +147,7 @@ def run_benchmark():
             if expected and expected in rag_top_doc:
                 rag_hit = True
         
-        # --- Mem0 Retrieval (User-Scoped Search) ---
+        # Mem0 Retrieval (User-Scoped Search)
         mem0_start = time.time()
         mem0_res = mem0_client.search(query=query_text, filters={"user_id": user_id}, limit=3)
         mem0_latency = time.time() - mem0_start
@@ -142,10 +178,8 @@ def run_benchmark():
         print(f"  Mem0: {'HIT' if mem0_hit else 'MISS'} | {mem0_top_doc[:60]}...")
         print()
     
-    # --- Summary ---
+    # Summary
     df = pd.DataFrame(results)
-    
-    # Filter to queries where we expected a hit
     df_expected = df[df["expected"].notna()]
     
     rag_hit_rate = df_expected["rag_hit"].mean()
@@ -163,4 +197,8 @@ def run_benchmark():
     print("\nDetailed results saved to conversational_benchmark_results.csv")
 
 if __name__ == "__main__":
-    run_benchmark()
+    parser = argparse.ArgumentParser(description="Benchmark RAG vs Mem0 for conversational memory retrieval")
+    parser.add_argument("--fresh", action="store_true", help="Create new sample memories (for fresh Mem0 accounts)")
+    args = parser.parse_args()
+    
+    run_benchmark(use_fresh=args.fresh)

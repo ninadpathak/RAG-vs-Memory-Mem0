@@ -43,12 +43,18 @@ pip install -r requirements.txt
 
 ## Running the Benchmark
 
+**Option 1: Use existing memories** (if you already have data in Mem0)
 ```bash
 python benchmark_conversational.py
 ```
 
+**Option 2: Fresh account** (creates sample memories first)
+```bash
+python benchmark_conversational.py --fresh
+```
+
 The benchmark will:
-1. Fetch existing memories from Mem0
+1. Fetch existing memories from Mem0 (or create sample memories with `--fresh`)
 2. Build a RAG index with those same memories (no scoping)
 3. Run retrieval queries for different users
 4. Compare hit rates
